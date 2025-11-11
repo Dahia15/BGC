@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TournamentPro | Professional Tournament Management</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Login Screen -->
+    <div id="loginScreen" class="login-screen">
+        <!-- Content will be populated by JavaScript -->
+    </div>
+
+    <!-- Main App -->
+    <div id="appContainer" class="app-container hidden">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-main">
+                <div class="header-left">
+                    <div class="logo">
+                        <i class="fas fa-trophy"></i>
+                        <span>TournamentPro</span>
+                    </div>
+                </div>
+                <div class="header-center">
+                    <nav class="main-nav">
+                        <button class="nav-btn active" data-section="dashboard">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </button>
+                        <button class="nav-btn" data-section="tournaments">
+                            <i class="fas fa-chess"></i>
+                            Tournaments
+                        </button>
+                        <button class="nav-btn" data-section="matches">
+                            <i class="fas fa-gamepad"></i>
+                            Matches
+                        </button>
+                        <button class="nav-btn" data-section="players">
+                            <i class="fas fa-users"></i>
+                            Players
+                        </button>
+                        <button class="nav-btn" data-section="analytics">
+                            <i class="fas fa-chart-bar"></i>
+                            Analytics
+                        </button>
+                    </nav>
+                </div>
+                <div class="header-right">
+                    <div class="user-menu">
+                        <div class="user-info">
+                            <div class="user-avatar">
+                                <i class="fas fa-user"></i>
+                            </div>
+                            <span id="userName" class="user-name">Loading...</span>
+                        </div>
+                        <button id="logoutBtn" class="btn btn-icon btn-logout">
+                            <i class="fas fa-sign-out-alt"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Dashboard Section -->
+            <section id="dashboard" class="content-section active">
+                <div class="section-header">
+                    <h1>Dashboard</h1>
+                    <p>Overview of your tournament ecosystem</p>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-chess"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="activeTournaments">0</h3>
+                            <p>Active Tournaments</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="totalPlayers">0</h3>
+                            <p>Total Players</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-gamepad"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="liveMatches">0</h3>
+                            <p>Live Matches</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-trophy"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="completedEvents">0</h3>
+                            <p>Completed Events</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="content-grid">
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Recent Tournaments</h3>
+                            <button class="btn btn-sm btn-outline" onclick="switchSection('tournaments')">
+                                View All
+                            </button>
+                        </div>
+                        <div class="card-content">
+                            <div id="recentTournaments" class="tournament-list">
+                                <div class="loading">Loading tournaments...</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Quick Actions</h3>
+                        </div>
+                        <div class="card-content">
+                            <div class="quick-actions">
+                                <button class="quick-action-btn" onclick="showTournamentModal()">
+                                    <i class="fas fa-plus"></i>
+                                    <span>Create Tournament</span>
+                                </button>
+                                <button class="quick-action-btn" onclick="switchSection('players')">
+                                    <i class="fas fa-user-plus"></i>
+                                    <span>Add Players</span>
+                                </button>
+                                <button class="quick-action-btn" onclick="switchSection('matches')">
+                                    <i class="fas fa-play"></i>
+                                    <span>Start Match</span>
+                                </button>
+                                <button class="quick-action-btn" onclick="switchSection('analytics')">
+                                    <i class="fas fa-chart-pie"></i>
+                                    <span>View Reports</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tournaments Section -->
+            <section id="tournaments" class="content-section">
+                <div class="section-header">
+                    <div class="header-content">
+                        <h1>Tournament Management</h1>
+                        <p>Create and manage your competitive events</p>
+                    </div>
+                    <button id="createTournamentBtn" class="btn btn-primary">
+                        <i class="fas fa-plus"></i>
+                        New Tournament
+                    </button>
+                </div>
+                <div class="content-card">
+                    <div class="card-header">
+                        <h3>Your Tournaments</h3>
+                        <div class="header-actions">
+                            <div class="search-box">
+                                <i class="fas fa-search"></i>
+                                <input type="text" id="tournamentSearch" placeholder="Search tournaments...">
+                            </div>
+                            <select class="filter-select">
+                                <option>All Status</option>
+                                <option>Active</option>
+                                <option>Completed</option>
+                                <option>Draft</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="card-content">
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Tournament</th>
+                                        <th>Game</th>
+                                        <th>Type</th>
+                                        <th>Players</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tournamentsTable">
+                                    <tr>
+                                        <td colspan="6" class="loading-cell">Loading tournaments...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Matches Section -->
+            <section id="matches" class="content-section">
+                <div class="section-header">
+                    <div class="header-content">
+                        <h1>Match Management</h1>
+                        <p>Oversee and control competitive matches</p>
+                    </div>
+                    <div class="tournament-selector">
+                        <select id="tournamentSelect" class="select-primary">
+                            <option value="">Select Tournament</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="content-grid">
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Live Matches</h3>
+                            <div class="live-indicator">
+                                <span class="pulse"></span>
+                                Live
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <div id="liveMatchesList" class="matches-list">
+                                <div class="empty-state">
+                                    <i class="fas fa-gamepad"></i>
+                                    <p>No live matches</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Upcoming Matches</h3>
+                        </div>
+                        <div class="card-content">
+                            <div id="upcomingMatchesList" class="matches-list">
+                                <div class="empty-state">
+                                    <i class="fas fa-clock"></i>
+                                    <p>No upcoming matches</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Players Section -->
+            <section id="players" class="content-section">
+                <div class="section-header">
+                    <div class="header-content">
+                        <h1>Player Management</h1>
+                        <p>Manage participants and team rosters</p>
+                    </div>
+                    <div class="header-actions">
+                        <select id="playerTournamentSelect" class="select-primary">
+                            <option value="">Select Tournament</option>
+                        </select>
+                        <button id="addPlayerBtn" class="btn btn-primary">
+                            <i class="fas fa-user-plus"></i>
+                            Add Player
+                        </button>
+                    </div>
+                </div>
+                <div class="content-card">
+                    <div class="card-content">
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Player</th>
+                                        <th>Seed</th>
+                                        <th>Wins</th>
+                                        <th>Losses</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="playersTable">
+                                    <tr>
+                                        <td colspan="6" class="loading-cell">Select a tournament to view players</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Analytics Section -->
+            <section id="analytics" class="content-section">
+                <div class="section-header">
+                    <h1>Tournament Analytics</h1>
+                    <p>Insights and performance metrics</p>
+                </div>
+                <div class="content-grid">
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Participation Trends</h3>
+                        </div>
+                        <div class="card-content">
+                            <div class="chart-placeholder">
+                                <i class="fas fa-chart-bar"></i>
+                                <p>Participation analytics chart</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Game Distribution</h3>
+                        </div>
+                        <div class="card-content">
+                            <div class="chart-placeholder">
+                                <i class="fas fa-chart-pie"></i>
+                                <p>Game distribution chart</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="tournamentModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Create New Tournament</h3>
+                <button class="modal-close" onclick="hideTournamentModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="tournamentForm" class="modal-body">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">Tournament Name</label>
+                        <input type="text" id="tournamentName" class="form-input" required 
+                               placeholder="Enter tournament name">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Game Title</label>
+                        <input type="text" id="tournamentGame" class="form-input" required
+                               placeholder="e.g., Street Fighter 6, Valorant">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Tournament Type</label>
+                        <select id="tournamentType" class="form-select" required>
+                            <option value="">Select format</option>
+                            <option value="single elimination">Single Elimination</option>
+                            <option value="double elimination">Double Elimination</option>
+                            <option value="round robin">Round Robin</option>
+                            <option value="swiss">Swiss System</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Max Participants</label>
+                        <input type="number" id="tournamentSize" class="form-input" 
+                               placeholder="Leave empty for unlimited" min="2" max="256">
+                    </div>
+                </div>
+            </form>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="hideTournamentModal()">Cancel</button>
+                <button type="submit" form="tournamentForm" class="btn btn-primary">Create Tournament</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="playerModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Add New Player</h3>
+                <button class="modal-close" onclick="hidePlayerModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="playerForm" class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Player Name</label>
+                    <input type="text" id="playerName" class="form-input" required 
+                           placeholder="Enter player name">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Email (Optional)</label>
+                    <input type="email" id="playerEmail" class="form-input" 
+                           placeholder="player@example.com">
+                </div>
+            </form>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="hidePlayerModal()">Cancel</button>
+                <button type="submit" form="playerForm" class="btn btn-primary">Add Player</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- View Tournament Modal -->
+    <div id="viewTournamentModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3>Tournament Details</h3>
+                <button class="modal-close" onclick="hideViewTournamentModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body" id="tournamentDetailsContent">
+                <div class="loading-spinner"><div class="spinner"></div></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="hideViewTournamentModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Tournament Modal -->
+    <div id="editTournamentModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Tournament</h3>
+                <button class="modal-close" onclick="hideEditTournamentModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="editTournamentForm" class="modal-body">
+                <input type="hidden" id="editTournamentId">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">Tournament Name</label>
+                        <input type="text" id="editTournamentName" class="form-input" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Game</label>
+                        <input type="text" id="editTournamentGame" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <textarea id="editTournamentDescription" class="form-input" rows="3"></textarea>
+                    </div>
+                </div>
+            </form>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="hideEditTournamentModal()">Cancel</button>
+                <button type="submit" form="editTournamentForm" class="btn btn-primary">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Player Modal -->
+    <div id="editPlayerModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Player</h3>
+                <button class="modal-close" onclick="hideEditPlayerModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="editPlayerForm" class="modal-body">
+                <input type="hidden" id="editPlayerId">
+                <input type="hidden" id="editPlayerTournamentId">
+                <div class="form-group">
+                    <label class="form-label">Player Name</label>
+                    <input type="text" id="editPlayerName" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Seed</label>
+                    <input type="number" id="editPlayerSeed" class="form-input" min="1">
+                </div>
+            </form>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="hideEditPlayerModal()">Cancel</button>
+                <button type="submit" form="editPlayerForm" class="btn btn-primary">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Report Score Modal -->
+    <div id="reportScoreModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Report Match Score</h3>
+                <button class="modal-close" onclick="hideReportScoreModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="reportScoreForm" class="modal-body">
+                <input type="hidden" id="reportScoreMatchId">
+                <input type="hidden" id="reportScoreTournamentId">
+                <div id="matchParticipants" class="form-group">
+                    <p style="color: var(--secondary); margin-bottom: 1rem;">Loading match details...</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Winner</label>
+                    <select id="reportScoreWinner" class="form-select" required>
+                        <option value="">Select winner</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Score (Optional)</label>
+                    <input type="text" id="reportScoreValue" class="form-input" 
+                           placeholder="e.g., 2-1, 3-0">
+                </div>
+            </form>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" onclick="hideReportScoreModal()">Cancel</button>
+                <button type="submit" form="reportScoreForm" class="btn btn-primary">Submit Score</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+        </div>
+        <p>Processing your request...</p>
+    </div>
+
+    <script src="js/script.js"></script>
+</body>
+</html>
