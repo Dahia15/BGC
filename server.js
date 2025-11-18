@@ -28,31 +28,86 @@ app.get('/', (req, res) => {
 
 // Add this helper function at the top of the file after imports
 async function fetchWithRetry(url, options, maxRetries = 3) {
+    let lastError = null;
+    
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            console.log(`Attempt ${attempt}/${maxRetries}...`);
+            console.log(`[Attempt ${attempt}/${maxRetries}] Fetching: ${url}`);
             const response = await fetch(url, options);
             const responseText = await response.text();
             
-            // Check for Cloudflare challenge
-            if (responseText.includes('Just a moment') || responseText.includes('<meta nam')) {
-                console.log(`Cloudflare detected, waiting before retry...`);
-                // Exponential backoff: 2^attempt * 1000ms (2s, 4s, 8s)
-                const delay = Math.min(Math.pow(2, attempt) * 1000, 8000);
-                await new Promise(resolve => setTimeout(resolve, delay));
-                continue;
+            console.log(`[Attempt ${attempt}] Response status: ${response.status}`);
+            
+            // Check for Cloudflare challenge or HTML error pages
+            const isHtml = responseText.trim().startsWith('<') || 
+                          responseText.includes('<!DOCTYPE') || 
+                          responseText.includes('<html');
+            
+            if (isHtml && (responseText.includes('Just a moment') || 
+                          responseText.includes('Checking your browser') ||
+                          responseText.includes('cloudflare'))) {
+                console.log(`[Attempt ${attempt}] Cloudflare challenge detected, waiting before retry...`);
+                
+                if (attempt < maxRetries) {
+                    // Exponential backoff with jitter: 2^attempt * 1000ms + random jitter
+                    const baseDelay = Math.min(Math.pow(2, attempt) * 1000, 10000);
+                    const jitter = Math.random() * 1000;
+                    const delay = baseDelay + jitter;
+                    console.log(`[Attempt ${attempt}] Waiting ${Math.round(delay)}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
+            }
+            
+            // If response is OK or it's a valid error response (JSON), return it
+            if (response.ok || !isHtml) {
+                console.log(`[Attempt ${attempt}] Request successful or valid response received`);
+                return { response, responseText };
+            }
+            
+            // If we got HTML but not Cloudflare, treat as error
+            if (isHtml) {
+                console.log(`[Attempt ${attempt}] Received HTML error page`);
+                lastError = new Error(`Received HTML error page (status ${response.status})`);
+                
+                if (attempt < maxRetries) {
+                    const delay = Math.min(Math.pow(2, attempt) * 1000, 10000);
+                    console.log(`[Attempt ${attempt}] Retrying in ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
             }
             
             return { response, responseText };
+            
         } catch (error) {
-            if (attempt === maxRetries) throw error;
-            const delay = Math.min(Math.pow(2, attempt) * 1000, 8000);
-            console.log(`Attempt ${attempt} failed, retrying in ${delay}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+            console.error(`[Attempt ${attempt}] Fetch error:`, error.message);
+            lastError = error;
+            
+            if (attempt < maxRetries) {
+                const delay = Math.min(Math.pow(2, attempt) * 1000, 10000);
+                console.log(`[Attempt ${attempt}] Network error, retrying in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
         }
     }
-    throw new Error('Max retries exceeded');
+    
+    console.error(`All ${maxRetries} attempts failed`);
+    throw lastError || new Error('Max retries exceeded');
 }
+
+// OAuth Debug Endpoint
+app.get('/api/oauth/debug', (req, res) => {
+    res.json({
+        client_id: process.env.CLIENT_ID ? '***' + process.env.CLIENT_ID.slice(-8) : 'Not configured',
+        redirect_uri: process.env.REDIRECT_URI || 'Not configured',
+        required_scopes: getRequiredScopes(),
+        has_client_secret: !!process.env.CLIENT_SECRET,
+        has_api_key: !!process.env.CHALLONGE_API_KEY,
+        server_health: 'OK'
+    });
+});
 
 // OAuth Token Exchange Endpoint
 app.post('/api/oauth/token', async (req, res) => {
@@ -79,6 +134,16 @@ app.post('/api/oauth/token', async (req, res) => {
 
         const tokenUrl = 'https://challonge.com/oauth/token';
         const formData = new URLSearchParams();
+        
+        // Validate credentials are available
+        if (!process.env.CLIENT_ID || !process.env.CLIENT_SECRET) {
+            console.error('OAuth credentials not configured!');
+            return res.status(500).json({
+                error: 'server_configuration_error',
+                error_description: 'OAuth CLIENT_ID or CLIENT_SECRET not configured on server. Please check .env file.'
+            });
+        }
+        
         formData.append('client_id', process.env.CLIENT_ID);
         formData.append('client_secret', process.env.CLIENT_SECRET);
         formData.append('grant_type', grant_type);
@@ -91,21 +156,39 @@ app.post('/api/oauth/token', async (req, res) => {
         }
 
         console.log('Exchanging token with Challonge (server-side).');
+        console.log('Token URL:', tokenUrl);
+        console.log('Grant type:', grant_type);
 
         const fetchOptions = {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+            headers: { 
+                'Content-Type': 'application/x-www-form-urlencoded', 
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Origin': process.env.REDIRECT_URI || 'http://localhost:3000',
+                'Referer': 'https://challonge.com/'
+            },
             body: formData,
             redirect: 'follow'
         };
 
-        const { response, responseText } = await fetchWithRetry(tokenUrl, fetchOptions);
+        const { response, responseText } = await fetchWithRetry(tokenUrl, fetchOptions, 5);
+        console.log('Token exchange response received, status:', response.status);
+        console.log('Response text preview:', responseText.substring(0, 200));
+        
         let data;
         try {
             data = JSON.parse(responseText);
         } catch (parseError) {
             console.error('Failed to parse Challonge token response:', parseError);
-            return res.status(502).json({ error: 'invalid_response', error_description: 'Invalid JSON from Challonge', debug: responseText.substring(0,200) });
+            console.error('Full response text:', responseText);
+            return res.status(502).json({ 
+                error: 'invalid_response', 
+                error_description: 'Invalid JSON from Challonge', 
+                debug: responseText.substring(0, 500) 
+            });
         }
 
         if (!response.ok) {
@@ -128,10 +211,16 @@ app.post('/api/oauth/token', async (req, res) => {
         }
 
         // Return token response to client (access_token, refresh_token, expires_in, etc.)
+        console.log('Token exchange successful, returning tokens to client');
         res.json(data);
     } catch (error) {
         console.error('Token exchange error:', error);
-        res.status(500).json({ error: 'server_error', error_description: error.message });
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ 
+            error: 'server_error', 
+            error_description: error.message,
+            details: error.stack?.split('\n')[0] || 'No additional details'
+        });
     }
 });
 

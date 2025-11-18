@@ -300,27 +300,85 @@
                     <h1>Tournament Analytics</h1>
                     <p>Insights and performance metrics</p>
                 </div>
-                <div class="content-grid">
-                    <div class="content-card">
-                        <div class="card-header">
-                            <h3>Participation Trends</h3>
+                
+                <!-- Summary Stats -->
+                <div class="stats-grid" style="margin-bottom: 2rem;">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-trophy"></i>
                         </div>
-                        <div class="card-content">
-                            <div class="chart-placeholder">
-                                <i class="fas fa-chart-bar"></i>
-                                <p>Participation analytics chart</p>
-                            </div>
+                        <div class="stat-content">
+                            <h3 id="analyticsTotal">0</h3>
+                            <p>Total Tournaments</p>
                         </div>
                     </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="analyticsTotalPlayers">0</h3>
+                            <p>Total Players</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-gamepad"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="analyticsTotalMatches">0</h3>
+                            <p>Total Matches</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-percentage"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="analyticsCompletionRate">0%</h3>
+                            <p>Completion Rate</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="content-grid">
+                    <!-- Tournament Status -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Tournament Status</h3>
+                        </div>
+                        <div class="card-content">
+                            <div id="statusChart" style="padding: 1rem;"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Game Distribution -->
                     <div class="content-card">
                         <div class="card-header">
                             <h3>Game Distribution</h3>
                         </div>
                         <div class="card-content">
-                            <div class="chart-placeholder">
-                                <i class="fas fa-chart-pie"></i>
-                                <p>Game distribution chart</p>
-                            </div>
+                            <div id="gameChart" style="padding: 1rem;"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Tournament Types -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Tournament Types</h3>
+                        </div>
+                        <div class="card-content">
+                            <div id="typeChart" style="padding: 1rem;"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Recent Activity -->
+                    <div class="content-card">
+                        <div class="card-header">
+                            <h3>Recent Activity</h3>
+                        </div>
+                        <div class="card-content">
+                            <div id="recentActivity" style="padding: 1rem;"></div>
                         </div>
                     </div>
                 </div>
@@ -390,9 +448,14 @@
                            placeholder="Enter player name">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Email (Optional)</label>
-                    <input type="email" id="playerEmail" class="form-input" 
-                           placeholder="player@example.com">
+                    <label class="form-label">Email or Username (Optional)</label>
+                    <input type="text" id="playerEmail" class="form-input" 
+                           placeholder="email@example.com or username">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Seed (Optional)</label>
+                    <input type="number" id="playerSeed" class="form-input" min="1"
+                           placeholder="Player seeding position">
                 </div>
             </form>
             <div class="modal-footer">
@@ -405,7 +468,7 @@
     <!-- View Tournament Modal -->
     <div id="viewTournamentModal" class="modal hidden">
         <div class="modal-backdrop"></div>
-        <div class="modal-content" style="max-width: 800px;">
+        <div class="modal-content" style="max-width: 1200px; max-height: 90vh; overflow-y: auto;">
             <div class="modal-header">
                 <h3>Tournament Details</h3>
                 <button class="modal-close" onclick="hideViewTournamentModal()">
@@ -424,7 +487,7 @@
     <!-- Edit Tournament Modal -->
     <div id="editTournamentModal" class="modal hidden">
         <div class="modal-backdrop"></div>
-        <div class="modal-content">
+        <div class="modal-content" style="max-width: 900px; max-height: 90vh; overflow-y: auto;">
             <div class="modal-header">
                 <h3>Edit Tournament</h3>
                 <button class="modal-close" onclick="hideEditTournamentModal()">
@@ -433,6 +496,8 @@
             </div>
             <form id="editTournamentForm" class="modal-body">
                 <input type="hidden" id="editTournamentId">
+                
+                <h4 style="margin: 0 0 1rem 0; color: var(--dark); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Tournament Details</h4>
                 <div class="form-grid">
                     <div class="form-group">
                         <label class="form-label">Tournament Name</label>
@@ -444,13 +509,31 @@
                     </div>
                     <div class="form-group">
                         <label class="form-label">Description</label>
-                        <textarea id="editTournamentDescription" class="form-input" rows="3"></textarea>
+                        <textarea id="editTournamentDescription" class="form-input" rows="3" style="resize: none;"></textarea>
                     </div>
                 </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0 1rem 0; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);">
+                    <h4 style="margin: 0; color: var(--dark);">Bracket & Participants</h4>
+                    <button type="button" id="editSeedsBtn" class="btn btn-outline btn-sm" onclick="toggleSeedEditor(document.getElementById('editTournamentId').value)" style="display: none;">
+                        <i class="fas fa-sort-numeric-down"></i> <span id="editSeedsBtnText">Edit Seeds</span>
+                    </button>
+                </div>
+                <div id="editTournamentParticipants" style="margin-bottom: 1rem;">
+                    <div class="loading-spinner"><div class="spinner"></div></div>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" onclick="showAddParticipantInEdit()">
+                    <i class="fas fa-plus"></i> Add Participant
+                </button>
             </form>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-outline" onclick="hideEditTournamentModal()">Cancel</button>
-                <button type="submit" form="editTournamentForm" class="btn btn-primary">Save Changes</button>
+            <div class="modal-footer" style="justify-content: space-between;">
+                <button type="button" id="startTournamentBtn" class="btn btn-success" onclick="startTournamentFromEdit()" style="display: none;">
+                    <i class="fas fa-play"></i> Start Tournament
+                </button>
+                <div style="display: flex; gap: 0.5rem; margin-left: auto;">
+                    <button type="button" class="btn btn-outline" onclick="hideEditTournamentModal()">Cancel</button>
+                    <button type="submit" form="editTournamentForm" class="btn btn-primary">Save Changes</button>
+                </div>
             </div>
         </div>
     </div>

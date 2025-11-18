@@ -310,39 +310,47 @@ async function verifyAccessToken() {
             const response = await apiCall('/tournaments.json?page=1&per_page=1');
             console.log('API test successful');
             
-            // Fetch actual user information
-            try {
-                const userResponse = await apiCall('/me');
-                state.currentUser = userResponse;
-                const username = userResponse.data?.attributes?.username || 
-                                userResponse.data?.attributes?.name || 
+            // Fetch actual user information (only if not already cached)
+            if (!state.currentUser || !state.currentUser.data?.attributes?.username) {
+                try {
+                    const userResponse = await apiCall('/me');
+                    state.currentUser = userResponse;
+                    const username = userResponse.data?.attributes?.username || 
+                                    userResponse.data?.attributes?.name || 
+                                    (state.useApiKey ? 'API Key User' : 'OAuth User');
+                    elements.userName.textContent = username;
+                    console.log('User info loaded:', username);
+                } catch (userError) {
+                    console.log('Could not fetch user info, using fallback:', userError.message);
+                    // Fallback if /me endpoint fails
+                    if (state.useApiKey) {
+                        state.currentUser = { 
+                            data: { 
+                                attributes: { 
+                                    username: 'API Key User',
+                                    email: 'api@challonge.com'
+                                } 
+                            } 
+                        };
+                        elements.userName.textContent = 'API Key User';
+                    } else {
+                        state.currentUser = { 
+                            data: { 
+                                attributes: { 
+                                    username: 'OAuth User',
+                                    email: 'user@challonge.com'
+                                } 
+                            } 
+                        };
+                        elements.userName.textContent = 'OAuth User';
+                    }
+                }
+            } else {
+                // Use cached user info
+                const username = state.currentUser.data?.attributes?.username || 
+                                state.currentUser.data?.attributes?.name || 
                                 (state.useApiKey ? 'API Key User' : 'OAuth User');
                 elements.userName.textContent = username;
-                console.log('User info loaded:', username);
-            } catch (userError) {
-                console.log('Could not fetch user info, using fallback:', userError.message);
-                // Fallback if /me endpoint fails
-                if (state.useApiKey) {
-                    state.currentUser = { 
-                        data: { 
-                            attributes: { 
-                                username: 'API Key User',
-                                email: 'api@challonge.com'
-                            } 
-                        } 
-                    };
-                    elements.userName.textContent = 'API Key User';
-                } else {
-                    state.currentUser = { 
-                        data: { 
-                            attributes: { 
-                                username: 'OAuth User',
-                                email: 'user@challonge.com'
-                            } 
-                        } 
-                    };
-                    elements.userName.textContent = 'OAuth User';
-                }
             }
             
         } catch (error) {
@@ -555,7 +563,17 @@ function logout() {
 async function apiCall(endpoint, options = {}) {
     if (state.isDemoMode) {
         return new Promise(resolve => setTimeout(() => {
-            if (endpoint.includes('/tournaments/') && endpoint.includes('/participants')) {
+            // Single tournament by ID
+            if (endpoint.match(/\/tournaments\/[^/]+$/) && !endpoint.includes('participants') && !endpoint.includes('matches')) {
+                const tournamentId = endpoint.split('/').pop();
+                const tournaments = getDemoTournaments();
+                const tournament = tournaments.find(t => t.id === tournamentId);
+                if (tournament) {
+                    resolve({ data: tournament });
+                } else {
+                    resolve({ data: tournaments[0] }); // Fallback to first tournament
+                }
+            } else if (endpoint.includes('/tournaments/') && endpoint.includes('/participants')) {
                 resolve({ data: getDemoPlayers() });
             } else if (endpoint.includes('/tournaments/') && endpoint.includes('/matches')) {
                 resolve({ data: getDemoMatches() });
@@ -994,12 +1012,17 @@ function displayTournamentsTable() {
             </td>
             <td>
                 <div style="display: flex; gap: 0.5rem;">
-                    <button class="btn btn-sm btn-outline" onclick="viewTournament('${tournament.id}')">
+                    <button class="btn btn-sm btn-outline" onclick="viewTournament('${tournament.id}')" title="View details">
                         <i class="fas fa-eye"></i>
                     </button>
-                    <button class="btn btn-sm btn-outline" onclick="editTournament('${tournament.id}')">
+                    <button class="btn btn-sm btn-outline" onclick="editTournament('${tournament.id}')" title="Edit tournament">
                         <i class="fas fa-edit"></i>
                     </button>
+                    ${tournament.attributes.state === 'pending' ? `
+                        <button class="btn btn-sm btn-primary" onclick="startTournament('${tournament.id}')" title="Start tournament">
+                            <i class="fas fa-play"></i>
+                        </button>
+                    ` : ''}
                 </div>
             </td>
         </tr>
@@ -1044,6 +1067,14 @@ async function createTournament(e) {
         description: `Tournament for ${formGame || 'untitled'}`,
         max_participants: formMaxParticipants ? parseInt(formMaxParticipants) : null
     };
+    
+    // Add round_robin_options if tournament type is round robin
+    if (formType === 'round robin') {
+        payload.round_robin_options = {
+            iterations: 1,
+            ranking: 'match wins'
+        };
+    }
     
     try {
         if (state.isDemoMode) {
@@ -1101,13 +1132,49 @@ async function addPlayer(e) {
     e.preventDefault();
     showLoading();
     
-    const playerName = document.getElementById('playerName').value;
+    const tournamentId = elements.playerTournamentSelect.value;
+    const playerName = document.getElementById('playerName').value.trim();
+    const playerEmail = document.getElementById('playerEmail').value.trim();
+    const playerSeed = document.getElementById('playerSeed').value;
+    
+    if (!tournamentId) {
+        showNotification('Please select a tournament first', 'warning');
+        hideLoading();
+        return;
+    }
+    
+    if (!playerName) {
+        showNotification('Player name is required', 'warning');
+        hideLoading();
+        return;
+    }
     
     try {
         if (state.isDemoMode) {
             showNotification('Player added successfully! (Demo Mode)', 'success');
         } else {
-            showNotification('Player addition would be sent to Challonge API in production', 'info');
+            // Create participant using Challonge API
+            const payload = {
+                data: {
+                    type: 'participants',
+                    attributes: {
+                        name: playerName,
+                        ...(playerSeed && { seed: parseInt(playerSeed) }),
+                        ...(playerEmail && { misc: playerEmail }) // Store email in misc field
+                    }
+                }
+            };
+            
+            const response = await apiCall(`/tournaments/${tournamentId}/participants`, {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+            
+            console.log('Participant created:', response);
+            showNotification('Player added successfully!', 'success');
+            
+            // Refresh player list
+            await loadPlayers();
         }
         
         hidePlayerModal();
@@ -1187,7 +1254,7 @@ function displayPlayersTable(players) {
             <td>
                 <div style="font-weight: 500; color: var(--dark);">${player.attributes.name}</div>
                 <div style="font-size: 0.875rem; color: var(--secondary);">
-                    ${player.attributes.username || 'No username'}
+                    ${player.attributes.username || player.attributes.misc || 'No username'}
                 </div>
             </td>
             <td>${player.attributes.seed || '-'}</td>
@@ -1247,6 +1314,7 @@ function displayMatches(matches) {
     const tournamentId = elements.tournamentSelect.value;
     const liveMatches = matches.filter(m => m.attributes.state === 'open');
     const upcomingMatches = matches.filter(m => m.attributes.state === 'pending');
+    const completedMatches = matches.filter(m => m.attributes.state === 'complete');
     
     if (liveMatches.length === 0) {
         elements.liveMatchesList.innerHTML = `
@@ -1256,23 +1324,7 @@ function displayMatches(matches) {
             </div>
         `;
     } else {
-        elements.liveMatchesList.innerHTML = liveMatches.map(match => `
-            <div class="match-item" style="padding: 1rem; border-bottom: 1px solid var(--border);">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h4 style="margin: 0 0 0.25rem 0; color: var(--dark);">
-                            Match ${match.attributes.identifier || match.attributes.round}
-                        </h4>
-                        <p style="margin: 0; color: var(--secondary); font-size: 0.875rem;">
-                            Round ${match.attributes.round}
-                        </p>
-                    </div>
-                    <button class="btn btn-sm btn-primary" onclick="reportScore('${match.id}', '${tournamentId}')">
-                        Report Score
-                    </button>
-                </div>
-            </div>
-        `).join('');
+        elements.liveMatchesList.innerHTML = liveMatches.map(match => renderMatchCard(match, tournamentId, 'live')).join('');
     }
     
     if (upcomingMatches.length === 0) {
@@ -1283,18 +1335,204 @@ function displayMatches(matches) {
             </div>
         `;
     } else {
-        elements.upcomingMatchesList.innerHTML = upcomingMatches.map(match => `
-            <div class="match-item" style="padding: 1rem; border-bottom: 1px solid var(--border);">
+        elements.upcomingMatchesList.innerHTML = upcomingMatches.map(match => renderMatchCard(match, tournamentId, 'upcoming')).join('');
+    }
+}
+
+function renderMatchCard(match, tournamentId, type) {
+    const attrs = match.attributes;
+    const player1 = attrs.player1_id;
+    const player2 = attrs.player2_id;
+    
+    return `
+        <div class="match-item" style="padding: 1rem; border: 1px solid var(--border); border-radius: 4px; margin-bottom: 0.5rem; background: white;">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.75rem;">
                 <div>
                     <h4 style="margin: 0 0 0.25rem 0; color: var(--dark);">
-                        Match ${match.attributes.identifier || match.attributes.round}
+                        Round ${attrs.round} - Match ${attrs.identifier || attrs.suggested_play_order || ''}
                     </h4>
                     <p style="margin: 0; color: var(--secondary); font-size: 0.875rem;">
-                        Round ${match.attributes.round} • Waiting to start
+                        ${type === 'live' ? '<span style="color: #10b981;">● LIVE</span>' : 'Pending'}
                     </p>
                 </div>
+                ${type === 'live' ? `
+                    <button class="btn btn-sm btn-primary" onclick="viewMatchDetails('${match.id}', '${tournamentId}')">
+                        <i class="fas fa-trophy"></i> Report Winner
+                    </button>
+                ` : ''}
             </div>
-        `).join('');
+            
+            <div style="display: grid; gap: 0.5rem;">
+                <div style="display: flex; align-items: center; padding: 0.5rem; background: var(--background); border-radius: 4px; ${attrs.winner_id && attrs.winner_id == player1 ? 'border-left: 3px solid #10b981;' : ''}">
+                    <div style="flex: 1;">
+                        <span style="font-weight: ${attrs.winner_id && attrs.winner_id == player1 ? '600' : '500'};">
+                            Player 1 ${player1 ? `(ID: ${player1})` : '- TBD'}
+                        </span>
+                    </div>
+                    ${attrs.scores_csv ? `<span style="font-weight: 600; color: var(--dark);">${attrs.scores_csv.split('-')[0] || '-'}</span>` : ''}
+                </div>
+                
+                <div style="display: flex; align-items: center; padding: 0.5rem; background: var(--background); border-radius: 4px; ${attrs.winner_id && attrs.winner_id == player2 ? 'border-left: 3px solid #10b981;' : ''}">
+                    <div style="flex: 1;">
+                        <span style="font-weight: ${attrs.winner_id && attrs.winner_id == player2 ? '600' : '500'};">
+                            Player 2 ${player2 ? `(ID: ${player2})` : '- TBD'}
+                        </span>
+                    </div>
+                    ${attrs.scores_csv ? `<span style="font-weight: 600; color: var(--dark);">${attrs.scores_csv.split('-')[1] || '-'}</span>` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+async function viewMatchDetails(matchId, tournamentId) {
+    try {
+        showLoading();
+        
+        // Load match details
+        const matchResponse = await apiCall(`/tournaments/${tournamentId}/matches/${matchId}`);
+        const match = matchResponse.data;
+        const attrs = match.attributes;
+        
+        // Get participant names
+        let player1Name = 'Player 1 (TBD)';
+        let player2Name = 'Player 2 (TBD)';
+        
+        if (attrs.player1_id) {
+            try {
+                const p1 = await apiCall(`/tournaments/${tournamentId}/participants/${attrs.player1_id}`);
+                player1Name = p1.data.attributes.name;
+            } catch (err) {
+                player1Name = `Player ${attrs.player1_id}`;
+            }
+        }
+        
+        if (attrs.player2_id) {
+            try {
+                const p2 = await apiCall(`/tournaments/${tournamentId}/participants/${attrs.player2_id}`);
+                player2Name = p2.data.attributes.name;
+            } catch (err) {
+                player2Name = `Player ${attrs.player2_id}`;
+            }
+        }
+        
+        hideLoading();
+        
+        // Show match details modal
+        const modalHtml = `
+            <div class="modal" id="matchDetailsModal">
+                <div class="modal-backdrop" onclick="closeMatchDetailsModal()"></div>
+                <div class="modal-content" style="max-width: 600px;">
+                    <div class="modal-header">
+                        <h3>Report Match Winner</h3>
+                        <button class="modal-close" onclick="closeMatchDetailsModal()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div style="text-align: center; margin-bottom: 1.5rem;">
+                            <h4 style="margin: 0 0 0.5rem 0; color: var(--dark);">Round ${attrs.round} - Match ${attrs.identifier || attrs.suggested_play_order || ''}</h4>
+                            <span style="background: #10b98120; color: #10b981; padding: 0.25rem 0.75rem; border-radius: 12px; font-size: 0.875rem;">● LIVE</span>
+                        </div>
+                        
+                        <div style="display: grid; gap: 1rem; margin-bottom: 1.5rem;">
+                            <button type="button" class="btn btn-lg" style="padding: 1rem; text-align: left; background: white; border: 2px solid var(--border); display: flex; justify-content: space-between; align-items: center;" 
+                                    onclick="selectMatchWinner('${matchId}', '${tournamentId}', '${attrs.player1_id}', '${player1Name.replace(/'/g, "\\'")}')">
+                                <div>
+                                    <div style="font-weight: 600; font-size: 1.125rem;">${player1Name}</div>
+                                    <div style="font-size: 0.875rem; color: var(--secondary);">Click to declare winner</div>
+                                </div>
+                                <i class="fas fa-trophy" style="font-size: 1.5rem; color: #f59e0b;"></i>
+                            </button>
+                            
+                            <button type="button" class="btn btn-lg" style="padding: 1rem; text-align: left; background: white; border: 2px solid var(--border); display: flex; justify-content: space-between; align-items: center;" 
+                                    onclick="selectMatchWinner('${matchId}', '${tournamentId}', '${attrs.player2_id}', '${player2Name.replace(/'/g, "\\'")}')">
+                                <div>
+                                    <div style="font-weight: 600; font-size: 1.125rem;">${player2Name}</div>
+                                    <div style="font-size: 0.875rem; color: var(--secondary);">Click to declare winner</div>
+                                </div>
+                                <i class="fas fa-trophy" style="font-size: 1.5rem; color: #f59e0b;"></i>
+                            </button>
+                        </div>
+                        
+                        <div style="padding: 1rem; background: var(--background); border-radius: 4px;">
+                            <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Optional: Enter Score</label>
+                            <input type="text" id="matchScoreInput" class="form-input" placeholder="e.g., 2-1, 3-0, 21-19" 
+                                   style="text-align: center; font-size: 1.125rem;">
+                            <div style="margin-top: 0.5rem; font-size: 0.875rem; color: var(--secondary);">
+                                Score format: Winner Score - Loser Score
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline" onclick="closeMatchDetailsModal()">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Remove existing modal if any
+        const existingModal = document.getElementById('matchDetailsModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // Add new modal
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        document.getElementById('matchDetailsModal').classList.remove('hidden');
+        
+    } catch (error) {
+        hideLoading();
+        console.error('Failed to load match details:', error);
+        showNotification('Failed to load match details: ' + error.message, 'error');
+    }
+}
+
+function closeMatchDetailsModal() {
+    const modal = document.getElementById('matchDetailsModal');
+    if (modal) {
+        modal.remove();
+    }
+}
+
+async function selectMatchWinner(matchId, tournamentId, winnerId, winnerName) {
+    if (!winnerId) {
+        showNotification('Cannot select TBD as winner', 'warning');
+        return;
+    }
+    
+    const score = document.getElementById('matchScoreInput')?.value.trim();
+    
+    if (!confirm(`Declare ${winnerName} as the winner?${score ? `\nScore: ${score}` : ''}`)) {
+        return;
+    }
+    
+    try {
+        showLoading();
+        closeMatchDetailsModal();
+        
+        const payload = {
+            data: {
+                type: 'matches',
+                attributes: {
+                    winner_id: winnerId,
+                    ...(score && { scores_csv: score })
+                }
+            }
+        };
+        
+        await apiCall(`/tournaments/${tournamentId}/matches/${matchId}`, {
+            method: 'PUT',
+            body: JSON.stringify(payload)
+        });
+        
+        showNotification(`${winnerName} declared winner!`, 'success');
+        await loadMatches();
+    } catch (error) {
+        console.error('Failed to report winner:', error);
+        showNotification('Failed to report winner: ' + error.message, 'error');
+    } finally {
+        hideLoading();
     }
 }
 
@@ -1383,6 +1621,196 @@ function showNotification(message, type = 'info') {
     }, 3000);
 }
 
+// Bracket Rendering Function
+function renderBracket(matches, participants, tournamentType) {
+    // Create a map of participant IDs to names
+    const participantMap = {};
+    participants.forEach(p => {
+        participantMap[p.id] = p.attributes.name;
+    });
+    
+    // Group matches by round
+    const rounds = {};
+    matches.forEach(match => {
+        const round = match.attributes.round;
+        if (!rounds[round]) rounds[round] = [];
+        rounds[round].push(match);
+    });
+    
+    // Sort rounds
+    const sortedRounds = Object.keys(rounds).sort((a, b) => parseInt(a) - parseInt(b));
+    
+    if (sortedRounds.length === 0) {
+        return '<p style="color: var(--secondary);">No bracket available yet</p>';
+    }
+    
+    // Helper function to get participant name
+    const getParticipantName = (id) => {
+        if (!id) return 'TBD';
+        return participantMap[id] || `Player ${id}`;
+    };
+    
+    // Render bracket
+    let bracketHtml = '<div style="overflow-x: auto; padding: 1rem; background: var(--background); border-radius: var(--border-radius);">';
+    bracketHtml += '<div style="display: flex; gap: 2rem; min-width: min-content;">';
+    
+    sortedRounds.forEach((roundNum, index) => {
+        const roundMatches = rounds[roundNum];
+        const roundName = getRoundName(parseInt(roundNum), sortedRounds.length, tournamentType);
+        
+        bracketHtml += `
+            <div style="min-width: 250px;">
+                <h4 style="text-align: center; margin: 0 0 1rem 0; color: var(--dark); font-size: 0.875rem; text-transform: uppercase;">
+                    ${roundName}
+                </h4>
+                <div style="display: flex; flex-direction: column; gap: ${index === 0 ? '1rem' : Math.pow(2, index) + 'rem'};">
+                    ${roundMatches.map(match => {
+                        const attrs = match.attributes;
+                        const player1Name = getParticipantName(attrs.player1_id);
+                        const player2Name = getParticipantName(attrs.player2_id);
+                        const winnerId = attrs.winner_id;
+                        
+                        return `
+                            <div style="background: white; border: 1px solid var(--border); border-radius: 4px; overflow: hidden;">
+                                <div style="padding: 0.5rem; ${winnerId && winnerId == attrs.player1_id ? 'background: #10b98120; border-left: 3px solid #10b981;' : 'border-left: 3px solid transparent;'}">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 0.875rem; ${winnerId && winnerId == attrs.player1_id ? 'font-weight: 600;' : ''}">${player1Name}</span>
+                                        <span style="font-size: 0.75rem; color: var(--secondary);">${attrs.scores_csv ? attrs.scores_csv.split('-')[0] || '' : ''}</span>
+                                    </div>
+                                </div>
+                                <div style="padding: 0.5rem; border-top: 1px solid var(--border); ${winnerId && winnerId == attrs.player2_id ? 'background: #10b98120; border-left: 3px solid #10b981;' : 'border-left: 3px solid transparent;'}">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span style="font-size: 0.875rem; ${winnerId && winnerId == attrs.player2_id ? 'font-weight: 600;' : ''}">${player2Name}</span>
+                                        <span style="font-size: 0.75rem; color: var(--secondary);">${attrs.scores_csv ? attrs.scores_csv.split('-')[1] || '' : ''}</span>
+                                    </div>
+                                </div>
+                                ${attrs.state === 'open' ? '<div style="text-align: center; padding: 0.25rem; background: #3b82f620; font-size: 0.75rem; color: #3b82f6;">LIVE</div>' : ''}
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    });
+    
+    bracketHtml += '</div></div>';
+    return bracketHtml;
+}
+
+function getRoundName(roundNum, totalRounds, tournamentType) {
+    // For single/double elimination
+    const roundsFromEnd = totalRounds - roundNum + 1;
+    
+    if (roundNum < 0) {
+        // Loser's bracket (double elimination)
+        return `LB Round ${Math.abs(roundNum)}`;
+    }
+    
+    if (roundsFromEnd === 1) return 'Finals';
+    if (roundsFromEnd === 2) return 'Semi-Finals';
+    if (roundsFromEnd === 3) return 'Quarter-Finals';
+    if (roundsFromEnd === 4) return 'Round of 16';
+    
+    return `Round ${roundNum}`;
+}
+
+// Render bracket for tournaments that haven't started yet
+function renderPendingBracket(participants, tournamentType) {
+    if (participants.length === 0) {
+        return '<p style="color: var(--secondary);">No participants yet. Add participants to see the bracket preview.</p>';
+    }
+    
+    // Calculate number of rounds needed
+    const participantCount = participants.length;
+    const rounds = Math.ceil(Math.log2(participantCount)) || 1;
+    
+    // Sort participants by seed
+    const sortedParticipants = [...participants].sort((a, b) => {
+        const seedA = a.attributes.seed || 999;
+        const seedB = b.attributes.seed || 999;
+        return seedA - seedB;
+    });
+    
+    // Create first round matchups
+    const firstRoundMatches = [];
+    for (let i = 0; i < Math.pow(2, rounds) / 2; i++) {
+        const player1 = sortedParticipants[i * 2];
+        const player2 = sortedParticipants[i * 2 + 1];
+        firstRoundMatches.push({
+            player1: player1 ? player1.attributes.name : 'TBD',
+            player2: player2 ? player2.attributes.name : 'TBD',
+            seed1: player1?.attributes.seed || null,
+            seed2: player2?.attributes.seed || null
+        });
+    }
+    
+    let bracketHtml = '<div style="overflow-x: auto; padding: 1rem; background: var(--background); border-radius: var(--border-radius);">';
+    bracketHtml += '<div style="display: flex; gap: 2rem; min-width: min-content;">';
+    
+    // Render first round
+    bracketHtml += `
+        <div style="min-width: 250px;">
+            <h4 style="text-align: center; margin: 0 0 1rem 0; color: var(--dark); font-size: 0.875rem; text-transform: uppercase;">
+                ${getRoundName(1, rounds, tournamentType)}
+            </h4>
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+                ${firstRoundMatches.map(match => `
+                    <div style="background: white; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; opacity: 0.7;">
+                        <div style="padding: 0.5rem; border-left: 3px solid #94a3b8;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.875rem;">${match.player1}</span>
+                                ${match.seed1 ? `<span style="font-size: 0.75rem; color: var(--secondary);">#${match.seed1}</span>` : ''}
+                            </div>
+                        </div>
+                        <div style="padding: 0.5rem; border-top: 1px solid var(--border); border-left: 3px solid #94a3b8;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 0.875rem;">${match.player2}</span>
+                                ${match.seed2 ? `<span style="font-size: 0.75rem; color: var(--secondary);">#${match.seed2}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+    
+    // Render subsequent rounds as placeholders
+    for (let round = 2; round <= rounds; round++) {
+        const matchesInRound = Math.pow(2, rounds - round);
+        bracketHtml += `
+            <div style="min-width: 250px;">
+                <h4 style="text-align: center; margin: 0 0 1rem 0; color: var(--dark); font-size: 0.875rem; text-transform: uppercase;">
+                    ${getRoundName(round, rounds, tournamentType)}
+                </h4>
+                <div style="display: flex; flex-direction: column; gap: ${Math.pow(2, round - 1)}rem;">
+                    ${Array(matchesInRound).fill(0).map(() => `
+                        <div style="background: white; border: 1px dashed var(--border); border-radius: 4px; overflow: hidden; opacity: 0.4;">
+                            <div style="padding: 0.5rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-size: 0.875rem; color: var(--secondary);">Winner TBD</span>
+                                </div>
+                            </div>
+                            <div style="padding: 0.5rem; border-top: 1px dashed var(--border);">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-size: 0.875rem; color: var(--secondary);">Winner TBD</span>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+    
+    bracketHtml += '</div>';
+    bracketHtml += '<div style="margin-top: 1rem; padding: 0.75rem; background: #3b82f620; border-radius: 4px; text-align: center; color: var(--secondary); font-size: 0.875rem;">';
+    bracketHtml += '<i class="fas fa-info-circle"></i> This is a preview bracket. Start the tournament to begin matches.';
+    bracketHtml += '</div>';
+    bracketHtml += '</div>';
+    
+    return bracketHtml;
+}
+
 // Tournament View/Edit Functions
 async function viewTournament(tournamentId) {
     const modal = document.getElementById('viewTournamentModal');
@@ -1414,6 +1842,13 @@ async function viewTournament(tournamentId) {
         }
         
         const attrs = tournament.attributes;
+        console.log('Tournament attributes:', attrs);
+        console.log('Timestamps object:', attrs.timestamps);
+        
+        // Get created date from either timestamps object or direct attribute
+        const createdDate = attrs.timestamps?.created_at || attrs.created_at || attrs.createdAt;
+        console.log('Created date:', createdDate);
+        
         content.innerHTML = `
             <div style="display: grid; gap: 1.5rem;">
                 <div>
@@ -1467,6 +1902,13 @@ async function viewTournament(tournamentId) {
                     </div>
                 ` : '<p style="color: var(--secondary);">No participants yet</p>'}
                 
+                ${participants.length > 0 || matches.length > 0 ? `
+                    <div>
+                        <h3 style="margin: 0 0 1rem 0; color: var(--dark);">Tournament Bracket</h3>
+                        ${matches.length > 0 ? renderBracket(matches, participants, attrs.tournament_type) : renderPendingBracket(participants, attrs.tournament_type)}
+                    </div>
+                ` : ''}
+                
                 ${matches.length > 0 ? `
                     <div>
                         <h3 style="margin: 0 0 1rem 0; color: var(--dark);">Recent Matches</h3>
@@ -1485,10 +1927,9 @@ async function viewTournament(tournamentId) {
                     </div>
                 ` : ''}
                 
-                <div style="padding: 1rem; background: var(--background); border-radius: var(--border-radius);">
+                <div style="padding: 1rem; background: var(--background); border-radius: var(--border-radius); text-align: center;">
                     <p style="margin: 0; color: var(--secondary); font-size: 0.875rem;">
-                        <strong>URL:</strong> ${attrs.url || 'N/A'}<br>
-                        <strong>Created:</strong> ${attrs.created_at ? new Date(attrs.created_at).toLocaleDateString() : 'N/A'}
+                        ${attrs.url || 'No URL'} • ${createdDate ? new Date(createdDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'Date unknown'}
                     </p>
                 </div>
             </div>
@@ -1525,6 +1966,17 @@ async function editTournament(tournamentId) {
         document.getElementById('editTournamentGame').value = attrs.game_name || '';
         document.getElementById('editTournamentDescription').value = attrs.description || '';
         
+        // Show/hide start button based on tournament state
+        const startBtn = document.getElementById('startTournamentBtn');
+        if (attrs.state === 'pending') {
+            startBtn.style.display = 'block';
+        } else {
+            startBtn.style.display = 'none';
+        }
+        
+        // Load participants
+        await loadEditTournamentParticipants(tournamentId);
+        
         // Handle form submission
         const form = document.getElementById('editTournamentForm');
         form.onsubmit = async (e) => {
@@ -1535,6 +1987,78 @@ async function editTournament(tournamentId) {
         console.error('Failed to load tournament for editing:', error);
         showNotification('Failed to load tournament: ' + error.message, 'error');
         hideEditTournamentModal();
+    }
+}
+
+async function loadEditTournamentParticipants(tournamentId, showInlineLoading = false) {
+    const container = document.getElementById('editTournamentParticipants');
+    
+    if (showInlineLoading) {
+        // Show inline loading animation
+        const currentContent = container.innerHTML;
+        container.style.opacity = '0.5';
+        container.style.pointerEvents = 'none';
+    }
+    
+    try {
+        const response = await apiCall(`/tournaments/${tournamentId}/participants`);
+        const participants = response.data || [];
+        
+        if (participants.length === 0) {
+            // Hide edit seeds button
+            const editSeedsBtn = document.getElementById('editSeedsBtn');
+            if (editSeedsBtn) {
+                editSeedsBtn.style.display = 'none';
+            }
+            
+            container.innerHTML = '<p style="color: var(--secondary); text-align: center; padding: 1rem;">No participants yet. Add participants to build your bracket.</p>';
+            container.style.opacity = '1';
+            container.style.pointerEvents = 'auto';
+            return;
+        }
+        
+        // Sort by seed
+        participants.sort((a, b) => {
+            const seedA = a.attributes.seed || 999;
+            const seedB = b.attributes.seed || 999;
+            return seedA - seedB;
+        });
+        
+        // Show edit seeds button
+        const editSeedsBtn = document.getElementById('editSeedsBtn');
+        if (editSeedsBtn) {
+            editSeedsBtn.style.display = 'flex';
+        }
+        
+        container.innerHTML = `
+            <div style="display: grid; gap: 0.5rem;">
+                ${participants.map(p => `
+                    <div style="display: flex; align-items: center; gap: 1rem; padding: 0.75rem; background: white; border: 1px solid var(--border); border-radius: 4px;">
+                        <div style="width: 40px; text-align: center; font-weight: 600; color: var(--secondary);">
+                            #${p.attributes.seed || '?'}
+                        </div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 500;">${p.attributes.name}</div>
+                            ${p.attributes.username || p.attributes.misc ? `<div style="font-size: 0.875rem; color: var(--secondary);">${p.attributes.username || p.attributes.misc}</div>` : ''}
+                        </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button type="button" class="btn btn-sm btn-outline" onclick="deleteParticipant('${p.id}', '${tournamentId}')" title="Remove participant">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+        
+        // Fade back in
+        container.style.opacity = '1';
+        container.style.pointerEvents = 'auto';
+    } catch (error) {
+        console.error('Failed to load participants:', error);
+        container.innerHTML = '<p style="color: #ef4444; text-align: center; padding: 1rem;">Failed to load participants</p>';
+        container.style.opacity = '1';
+        container.style.pointerEvents = 'auto';
     }
 }
 
@@ -1581,6 +2105,370 @@ async function submitTournamentEdit() {
 
 function hideEditTournamentModal() {
     document.getElementById('editTournamentModal').classList.add('hidden');
+}
+
+async function startTournament(tournamentId) {
+    if (!confirm('Are you sure you want to start this tournament? This will lock the bracket and begin matches.')) {
+        return;
+    }
+    
+    try {
+        showLoading();
+        
+        const payload = {
+            data: {
+                type: 'TournamentState',
+                attributes: {
+                    state: 'start'
+                }
+            }
+        };
+        
+        await apiCall(`/tournaments/${tournamentId}/change_state`, {
+            method: 'PUT',
+            body: JSON.stringify(payload)
+        });
+        
+        showNotification('Tournament started successfully!', 'success');
+        await loadTournaments();
+        
+        if (state.currentSection === 'dashboard') {
+            updateDashboardStats();
+            displayRecentTournaments();
+        }
+    } catch (error) {
+        console.error('Failed to start tournament:', error);
+        showNotification('Failed to start tournament: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+async function startTournamentFromEdit() {
+    const tournamentId = document.getElementById('editTournamentId').value;
+    hideEditTournamentModal();
+    await startTournament(tournamentId);
+}
+
+// State for drag and drop
+let seedEditorState = {
+    draggedElement: null,
+    participants: [],
+    isEditing: false
+};
+
+async function toggleSeedEditor(tournamentId) {
+    if (seedEditorState.isEditing) {
+        // Cancel editing - reload participants
+        await loadEditTournamentParticipants(tournamentId, true);
+        seedEditorState.isEditing = false;
+        
+        // Update button
+        const btn = document.getElementById('editSeedsBtn');
+        const btnText = document.getElementById('editSeedsBtnText');
+        if (btn && btnText) {
+            btn.className = 'btn btn-outline btn-sm';
+            btnText.textContent = 'Edit Seeds';
+            btn.querySelector('i').className = 'fas fa-sort-numeric-down';
+        }
+    } else {
+        // Start editing
+        await openSeedEditor(tournamentId);
+        seedEditorState.isEditing = true;
+        
+        // Update button
+        const btn = document.getElementById('editSeedsBtn');
+        const btnText = document.getElementById('editSeedsBtnText');
+        if (btn && btnText) {
+            btn.className = 'btn btn-outline btn-sm';
+            btnText.textContent = 'Cancel';
+            btn.querySelector('i').className = 'fas fa-times';
+        }
+    }
+}
+
+async function openSeedEditor(tournamentId) {
+    const container = document.getElementById('editTournamentParticipants');
+    container.style.opacity = '0.5';
+    container.style.pointerEvents = 'none';
+    
+    try {
+        const response = await apiCall(`/tournaments/${tournamentId}/participants`);
+        const participants = response.data || [];
+        
+        if (participants.length === 0) {
+            showNotification('No participants to reorder', 'info');
+            container.style.opacity = '1';
+            container.style.pointerEvents = 'auto';
+            return;
+        }
+        
+        // Sort by current seed
+        participants.sort((a, b) => {
+            const seedA = a.attributes.seed || 999;
+            const seedB = b.attributes.seed || 999;
+            return seedA - seedB;
+        });
+        
+        seedEditorState.participants = participants;
+        
+        container.innerHTML = `
+            <div class="seed-info-banner">
+                <i class="fas fa-info-circle"></i>
+                <p><strong>Drag to reorder:</strong> Grab any participant and drag them to their new position. Seeds will be automatically updated.</p>
+            </div>
+            
+            <div id="seedList" style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem;">
+                ${participants.map((p, index) => `
+                    <div class="seed-item" 
+                         draggable="true" 
+                         data-participant-id="${p.id}"
+                         data-seed="${index + 1}">
+                        <div class="seed-drag-handle">
+                            <i class="fas fa-grip-vertical"></i>
+                        </div>
+                        <div class="seed-number">
+                            <div class="seed-number-badge">${index + 1}</div>
+                        </div>
+                        <div class="seed-player-info">
+                            <div class="seed-player-name">${p.attributes.name}</div>
+                            ${p.attributes.username || p.attributes.misc ? `
+                                <div class="seed-player-meta">${p.attributes.username || p.attributes.misc}</div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+            
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="saveSeedsInline('${tournamentId}')">
+                    <i class="fas fa-save"></i> Save Seed Order
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="randomizeSeedsInline('${tournamentId}')">
+                    <i class="fas fa-random"></i> Randomize
+                </button>
+            </div>
+        `;
+        
+        // Add drag and drop event listeners
+        const seedItems = container.querySelectorAll('.seed-item');
+        seedItems.forEach(item => {
+            item.addEventListener('dragstart', handleDragStart);
+            item.addEventListener('dragend', handleDragEnd);
+            item.addEventListener('dragover', handleDragOver);
+            item.addEventListener('drop', handleDrop);
+            item.addEventListener('dragenter', handleDragEnter);
+            item.addEventListener('dragleave', handleDragLeave);
+        });
+        
+        container.style.opacity = '1';
+        container.style.pointerEvents = 'auto';
+        
+    } catch (error) {
+        console.error('Failed to load seed editor:', error);
+        container.innerHTML = '<p style="color: #ef4444; text-align: center; padding: 1rem;">Failed to load participants</p>';
+        container.style.opacity = '1';
+        container.style.pointerEvents = 'auto';
+    }
+}
+
+async function saveSeedsInline(tournamentId) {
+    const seedItems = document.querySelectorAll('#seedList .seed-item');
+    
+    if (seedItems.length === 0) return;
+    
+    showLoading();
+    
+    try {
+        const updates = [];
+        
+        for (let i = 0; i < seedItems.length; i++) {
+            const item = seedItems[i];
+            const participantId = item.dataset.participantId;
+            const newSeed = i + 1;
+            
+            const participant = seedEditorState.participants.find(p => p.id === participantId);
+            if (!participant) continue;
+            
+            const payload = {
+                data: {
+                    type: 'participants',
+                    attributes: {
+                        name: participant.attributes.name,
+                        seed: newSeed
+                    }
+                }
+            };
+            
+            updates.push(
+                apiCall(`/tournaments/${tournamentId}/participants/${participantId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify(payload)
+                })
+            );
+        }
+        
+        await Promise.all(updates);
+        
+        hideLoading();
+        showNotification('Seeds updated successfully!', 'success');
+        
+        // Reset edit state and reload
+        seedEditorState.isEditing = false;
+        const btn = document.getElementById('editSeedsBtn');
+        const btnText = document.getElementById('editSeedsBtnText');
+        if (btn && btnText) {
+            btn.className = 'btn btn-outline btn-sm';
+            btnText.textContent = 'Edit Seeds';
+            btn.querySelector('i').className = 'fas fa-sort-numeric-down';
+        }
+        
+        await loadEditTournamentParticipants(tournamentId, true);
+        
+    } catch (error) {
+        hideLoading();
+        console.error('Failed to save seeds:', error);
+        showNotification('Failed to save seeds: ' + error.message, 'error');
+    }
+}
+
+async function randomizeSeedsInline(tournamentId) {
+    const seedList = document.getElementById('seedList');
+    if (!seedList) return;
+    
+    const items = Array.from(seedList.querySelectorAll('.seed-item'));
+    
+    // Shuffle array
+    for (let i = items.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [items[i], items[j]] = [items[j], items[i]];
+    }
+    
+    // Clear and re-append in new order
+    seedList.innerHTML = '';
+    items.forEach(item => seedList.appendChild(item));
+    
+    updateSeedNumbersVisually();
+    showNotification('Seeds randomized! Click "Save Seed Order" to apply.', 'info');
+}
+
+function handleDragStart(e) {
+    seedEditorState.draggedElement = e.currentTarget;
+    e.currentTarget.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+}
+
+function handleDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+    document.querySelectorAll('.seed-item').forEach(item => {
+        item.classList.remove('drag-over');
+    });
+}
+
+function handleDragOver(e) {
+    if (e.preventDefault) {
+        e.preventDefault();
+    }
+    e.dataTransfer.dropEffect = 'move';
+    return false;
+}
+
+function handleDragEnter(e) {
+    if (e.currentTarget !== seedEditorState.draggedElement) {
+        e.currentTarget.classList.add('drag-over');
+    }
+}
+
+function handleDragLeave(e) {
+    e.currentTarget.classList.remove('drag-over');
+}
+
+function handleDrop(e) {
+    if (e.stopPropagation) {
+        e.stopPropagation();
+    }
+    
+    const draggedEl = seedEditorState.draggedElement;
+    const targetEl = e.currentTarget;
+    
+    if (draggedEl !== targetEl) {
+        const seedList = document.getElementById('seedList');
+        const allItems = Array.from(seedList.querySelectorAll('.seed-item'));
+        const draggedIndex = allItems.indexOf(draggedEl);
+        const targetIndex = allItems.indexOf(targetEl);
+        
+        if (draggedIndex < targetIndex) {
+            targetEl.parentNode.insertBefore(draggedEl, targetEl.nextSibling);
+        } else {
+            targetEl.parentNode.insertBefore(draggedEl, targetEl);
+        }
+        
+        updateSeedNumbersVisually();
+    }
+    
+    return false;
+}
+
+function updateSeedNumbersVisually() {
+    const seedItems = document.querySelectorAll('#seedList .seed-item');
+    seedItems.forEach((item, index) => {
+        const badge = item.querySelector('.seed-number-badge');
+        if (badge) {
+            badge.textContent = index + 1;
+        }
+        item.dataset.seed = index + 1;
+    });
+}
+
+
+async function deleteParticipant(participantId, tournamentId) {
+    if (!confirm('Are you sure you want to remove this participant? This cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        await apiCall(`/tournaments/${tournamentId}/participants/${participantId}`, {
+            method: 'DELETE'
+        });
+        
+        showNotification('Participant removed successfully!', 'success');
+        await loadEditTournamentParticipants(tournamentId, true);
+    } catch (error) {
+        console.error('Failed to delete participant:', error);
+        showNotification('Failed to remove participant: ' + error.message, 'error');
+    }
+}
+
+async function showAddParticipantInEdit() {
+    const tournamentId = document.getElementById('editTournamentId').value;
+    const name = prompt('Enter participant name:');
+    
+    if (!name || !name.trim()) return;
+    
+    const seed = prompt('Enter seed (optional, leave empty to auto-assign):');
+    
+    try {
+        const payload = {
+            data: {
+                type: 'participants',
+                attributes: {
+                    name: name.trim(),
+                    ...(seed && !isNaN(parseInt(seed)) && { seed: parseInt(seed) })
+                }
+            }
+        };
+        
+        await apiCall(`/tournaments/${tournamentId}/participants`, {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+        
+        showNotification('Participant added successfully!', 'success');
+        await loadEditTournamentParticipants(tournamentId, true);
+    } catch (error) {
+        console.error('Failed to add participant:', error);
+        showNotification('Failed to add participant: ' + error.message, 'error');
+    }
 }
 
 async function editPlayer(playerId, tournamentId) {
@@ -1786,6 +2674,277 @@ async function submitMatchScore() {
 
 function hideReportScoreModal() {
     document.getElementById('reportScoreModal').classList.add('hidden');
+}
+
+// Analytics Functions
+async function loadAnalytics() {
+    try {
+        if (state.isDemoMode) {
+            displayAnalytics(getDemoTournaments());
+        } else {
+            const response = await apiCall('/tournaments');
+            const tournaments = response.data || [];
+            displayAnalytics(tournaments);
+        }
+    } catch (error) {
+        console.error('Failed to load analytics:', error);
+        showNotification('Failed to load analytics: ' + error.message, 'error');
+    }
+}
+
+function displayAnalytics(tournaments) {
+    // Calculate statistics
+    const totalTournaments = tournaments.length;
+    const completedTournaments = tournaments.filter(t => 
+        t.attributes.state === 'complete' || t.attributes.state === 'ended'
+    ).length;
+    const activeTournaments = tournaments.filter(t => 
+        t.attributes.state === 'underway' || t.attributes.state === 'checked_in'
+    ).length;
+    const pendingTournaments = tournaments.filter(t => 
+        t.attributes.state === 'pending' || t.attributes.state === 'awaiting_review'
+    ).length;
+    
+    // Count total participants and matches
+    let totalPlayers = 0;
+    let totalMatches = 0;
+    
+    tournaments.forEach(t => {
+        totalPlayers += t.attributes.participants_count || 0;
+        // Estimate matches based on tournament type and participants
+        const pCount = t.attributes.participants_count || 0;
+        if (pCount > 0) {
+            // Single elimination: n-1 matches, double: ~2n matches
+            totalMatches += pCount > 0 ? pCount - 1 : 0;
+        }
+    });
+    
+    const completionRate = totalTournaments > 0 
+        ? Math.round((completedTournaments / totalTournaments) * 100) 
+        : 0;
+    
+    // Update summary stats
+    document.getElementById('analyticsTotal').textContent = totalTournaments;
+    document.getElementById('analyticsTotalPlayers').textContent = totalPlayers;
+    document.getElementById('analyticsTotalMatches').textContent = totalMatches;
+    document.getElementById('analyticsCompletionRate').textContent = `${completionRate}%`;
+    
+    // Tournament Status Chart
+    displayStatusChart({ completed: completedTournaments, active: activeTournaments, pending: pendingTournaments });
+    
+    // Game Distribution
+    const games = {};
+    tournaments.forEach(t => {
+        const game = t.attributes.game_name || 'Unknown';
+        games[game] = (games[game] || 0) + 1;
+    });
+    displayGameChart(games);
+    
+    // Tournament Types
+    const types = {};
+    tournaments.forEach(t => {
+        const type = formatTournamentType(t.attributes.tournament_type || 'unknown');
+        types[type] = (types[type] || 0) + 1;
+    });
+    displayTypeChart(types);
+    
+    // Recent Activity
+    displayRecentActivity(tournaments.slice(0, 5));
+}
+
+function displayStatusChart(data) {
+    const container = document.getElementById('statusChart');
+    const total = data.completed + data.active + data.pending;
+    
+    if (total === 0) {
+        container.innerHTML = '<p style="text-align: center; color: var(--secondary); padding: 2rem;">No tournament data available</p>';
+        return;
+    }
+    
+    const completedPercent = (data.completed / total) * 100;
+    const activePercent = (data.active / total) * 100;
+    const pendingPercent = (data.pending / total) * 100;
+    
+    container.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+            <div class="stat-bar">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <span style="font-weight: 500; color: var(--dark);">
+                        <i class="fas fa-check-circle" style="color: #10b981;"></i> Completed
+                    </span>
+                    <span style="font-weight: 600; color: var(--dark);">${data.completed}</span>
+                </div>
+                <div style="background: #f3f4f6; border-radius: 999px; overflow: hidden; height: 8px;">
+                    <div style="background: #10b981; height: 100%; width: ${completedPercent}%; transition: width 0.3s ease;"></div>
+                </div>
+            </div>
+            
+            <div class="stat-bar">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <span style="font-weight: 500; color: var(--dark);">
+                        <i class="fas fa-play-circle" style="color: #3b82f6;"></i> Active
+                    </span>
+                    <span style="font-weight: 600; color: var(--dark);">${data.active}</span>
+                </div>
+                <div style="background: #f3f4f6; border-radius: 999px; overflow: hidden; height: 8px;">
+                    <div style="background: #3b82f6; height: 100%; width: ${activePercent}%; transition: width 0.3s ease;"></div>
+                </div>
+            </div>
+            
+            <div class="stat-bar">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <span style="font-weight: 500; color: var(--dark);">
+                        <i class="fas fa-clock" style="color: #f59e0b;"></i> Pending
+                    </span>
+                    <span style="font-weight: 600; color: var(--dark);">${data.pending}</span>
+                </div>
+                <div style="background: #f3f4f6; border-radius: 999px; overflow: hidden; height: 8px;">
+                    <div style="background: #f59e0b; height: 100%; width: ${pendingPercent}%; transition: width 0.3s ease;"></div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function displayGameChart(games) {
+    const container = document.getElementById('gameChart');
+    const entries = Object.entries(games).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    
+    if (entries.length === 0) {
+        container.innerHTML = '<p style="text-align: center; color: var(--secondary); padding: 2rem;">No game data available</p>';
+        return;
+    }
+    
+    const maxCount = Math.max(...entries.map(e => e[1]));
+    
+    container.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+            ${entries.map(([game, count]) => {
+                const percent = (count / maxCount) * 100;
+                return `
+                    <div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span style="font-weight: 500; color: var(--dark);">${game}</span>
+                            <span style="font-weight: 600; color: var(--dark);">${count}</span>
+                        </div>
+                        <div style="background: #f3f4f6; border-radius: 999px; overflow: hidden; height: 8px;">
+                            <div style="background: linear-gradient(135deg, #3b82f6, #8b5cf6); height: 100%; width: ${percent}%; transition: width 0.3s ease;"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function displayTypeChart(types) {
+    const container = document.getElementById('typeChart');
+    const entries = Object.entries(types).sort((a, b) => b[1] - a[1]);
+    
+    if (entries.length === 0) {
+        container.innerHTML = '<p style="text-align: center; color: var(--secondary); padding: 2rem;">No tournament type data available</p>';
+        return;
+    }
+    
+    const total = entries.reduce((sum, [_, count]) => sum + count, 0);
+    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+    
+    container.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+            ${entries.map(([type, count], index) => {
+                const percent = Math.round((count / total) * 100);
+                return `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: #f9fafb; border-radius: 6px;">
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <div style="width: 12px; height: 12px; border-radius: 50%; background: ${colors[index % colors.length]};"></div>
+                            <span style="font-weight: 500; color: var(--dark);">${type}</span>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-weight: 600; color: var(--dark);">${count}</div>
+                            <div style="font-size: 0.75rem; color: var(--secondary);">${percent}%</div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function displayRecentActivity(tournaments) {
+    const container = document.getElementById('recentActivity');
+    
+    if (tournaments.length === 0) {
+        container.innerHTML = '<p style="text-align: center; color: var(--secondary); padding: 2rem;">No recent activity</p>';
+        return;
+    }
+    
+    // Sort by updated_at or created_at
+    const sorted = [...tournaments].sort((a, b) => {
+        const dateA = new Date(a.attributes.updated_at || a.attributes.created_at);
+        const dateB = new Date(b.attributes.updated_at || b.attributes.created_at);
+        
+        // Handle invalid dates
+        if (isNaN(dateA.getTime())) return 1;
+        if (isNaN(dateB.getTime())) return -1;
+        
+        return dateB - dateA;
+    });
+    
+    container.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            ${sorted.slice(0, 5).map(t => {
+                const attrs = t.attributes;
+                const date = new Date(attrs.updated_at || attrs.created_at);
+                const timeAgo = getTimeAgo(date);
+                const statusClass = attrs.state === 'complete' ? 'success' : attrs.state === 'underway' ? 'primary' : 'secondary';
+                
+                return `
+                    <div style="padding: 0.875rem; background: white; border: 1px solid var(--border); border-radius: 6px; transition: all 0.2s ease;" onmouseover="this.style.borderColor='var(--primary)'; this.style.boxShadow='0 2px 8px rgba(59,130,246,0.1)'" onmouseout="this.style.borderColor='var(--border)'; this.style.boxShadow='none'">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                            <div style="font-weight: 500; color: var(--dark);">${attrs.name}</div>
+                            <span class="status-badge ${statusClass}">${formatStatus(attrs.state)}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.875rem; color: var(--secondary);">
+                            <span><i class="fas fa-users"></i> ${attrs.participants_count || 0} players</span>
+                            <span><i class="fas fa-clock"></i> ${timeAgo}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function formatStatus(state) {
+    const statusMap = {
+        'pending': 'Pending',
+        'underway': 'In Progress',
+        'complete': 'Completed',
+        'ended': 'Ended',
+        'awaiting_review': 'Review',
+        'checked_in': 'Check-in'
+    };
+    return statusMap[state] || state;
+}
+
+function getTimeAgo(date) {
+    // Check if date is valid
+    if (!date || isNaN(date.getTime())) {
+        return 'Recently';
+    }
+    
+    const seconds = Math.floor((new Date() - date) / 1000);
+    
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+    
+    try {
+        return date.toLocaleDateString();
+    } catch (e) {
+        return 'Recently';
+    }
 }
 
 // Initialize the application
